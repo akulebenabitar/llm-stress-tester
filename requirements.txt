@@ -1,0 +1,6 @@
+# No external dependencies required
+# Uses only Python standard library modules:
+# - requests (for HTTP calls)
+# - json, csv, time, threading, multiprocessing, argparse
+# - sys, os, datetime, statistics, re
+# - psutil (optional, for GPU monitoring)

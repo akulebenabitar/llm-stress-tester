@@ -1,0 +1,53 @@
+{
+  "endpoint": "http://localhost:1234/v1",
+  "api_key": "lm-studio",
+  "max_test_duration_seconds": 300,
+  "tests": {
+    "context_window": {
+      "enabled": true,
+      "min_tokens": 100,
+      "max_tokens": 200000,
+      "step_tokens": 2000,
+      "requests_per_size": 2
+    },
+    "rate_limit_burst": {
+      "enabled": true,
+      "duration_seconds": 30,
+      "target_rps": 20,
+      "max_concurrent": 16
+    },
+    "rate_limit_sustained": {
+      "enabled": true,
+      "duration_seconds": 60,
+      "target_rps": 10,
+      "max_concurrent": 8
+    },
+    "parallelism": {
+      "enabled": true,
+      "max_workers": 32,
+      "requests_per_worker": 3
+    },
+    "streaming": {
+      "enabled": true,
+      "num_requests": 10,
+      "max_tokens": 256
+    },
+    "error_handling": {
+      "enabled": true,
+      "num_invalid_requests": 5
+    },
+    "memory_stability": {
+      "enabled": true,
+      "duration_seconds": 300,
+      "requests_per_minute": 30
+    },
+    "gpu_monitoring": {
+      "enabled": true
+    }
+  },
+  "output": {
+    "save_json": true,
+    "save_csv": true,
+    "verbose": true
+  }
+}
