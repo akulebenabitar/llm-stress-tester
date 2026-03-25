@@ -19,6 +19,7 @@ A Python script to stress test local LLM endpoints served via LMStudio or any Op
 - Python 3.8+
 - LMStudio server running (or any OpenAI-compatible endpoint)
 - Optional: `psutil` for GPU monitoring
+- **Virtual environment**: The script will automatically create and run in a virtual environment for isolation. You can also manually activate a venv before running.
 
 ## Usage
 
@@ -41,6 +42,8 @@ python stress_tester.py --disable memory_stability
 # Set max duration
 python stress_tester.py --max-duration 180
 ```
+
+Note: The script will automatically create a virtual environment in `.venv/` if not already running in one. This ensures isolation from your system Python packages.
 
 ## Configuration
 

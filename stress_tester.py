@@ -13,6 +13,8 @@ import multiprocessing
 import argparse
 import sys
 import os
+import subprocess
+import venv
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
@@ -30,6 +32,40 @@ try:
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
+
+
+def ensure_venv():
+    """Ensure script runs in a virtual environment; create one if needed."""
+    # Check if we're already in a virtual environment
+    if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+        return  # Already in a venv
+    
+    # Not in a venv, create one
+    print("Creating virtual environment for isolation...")
+    venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.venv')
+    
+    # Create venv if it doesn't exist
+    if not os.path.exists(venv_dir):
+        venv.create(venv_dir, with_pip=False)
+    
+    # Determine Python executable in venv
+    if sys.platform == 'win32':
+        python_exe = os.path.join(venv_dir, 'Scripts', 'python.exe')
+    else:
+        python_exe = os.path.join(venv_dir, 'bin', 'python')
+    
+    # Re-run this script with the venv Python
+    print(f"Re-running in virtual environment: {venv_dir}")
+    # Pass all original arguments
+    args = [python_exe, __file__] + sys.argv[1:]
+    try:
+        subprocess.run(args, check=True)
+    except subprocess.CalledProcessError as e:
+        sys.exit(e.returncode)
+    except KeyboardInterrupt:
+        sys.exit(1)
+    sys.exit(0)
+
 
 # ANSI color codes for terminal output
 class Colors:
@@ -1547,6 +1583,7 @@ def load_config(config_file: str = None) -> Dict:
 
 def main():
     """Main entry point"""
+    ensure_venv()
     parser = argparse.ArgumentParser(
         description="LMStudio LLM Stress Tester - Comprehensive stress testing for local LLM endpoints",
         formatter_class=argparse.RawDescriptionHelpFormatter,
