@@ -197,6 +197,15 @@ class LMStudioClient:
             return response['data'], status
         return [], status
     
+    def get_model_info(self, model_id: str) -> Tuple[Dict, int]:
+        """Get detailed information about a specific model"""
+        url = f"{self.endpoint}/models/{model_id}"
+        response, status = self._make_request(url)
+        if status == 200:
+            return response, status
+        # Fallback: return empty dict
+        return {}, status
+    
     def chat_completion(self, messages: List[Dict], model: str, max_tokens: int = 256, 
                        temperature: float = 0.7, stream: bool = False) -> Tuple[Dict, int]:
         """Send chat completion request"""
@@ -326,6 +335,29 @@ class TestFramework:
         print(f"Step size: {step_tokens} tokens, Requests per size: {requests_per_size}")
         print(f"Max test points: {max_test_points}")
         
+        # Try to get model's advertised max context length
+        model_info, info_status = self.client.get_model_info(self.model)
+        advertised_max = None
+        if info_status == 200:
+            # Look for common field names
+            for key in ['context_length', 'max_context_length', 'max_tokens', 'n_ctx', 'ctx_len']:
+                if key in model_info:
+                    advertised_max = model_info[key]
+                    break
+            if advertised_max:
+                print(f"Model advertised max context length: {advertised_max:,} tokens")
+                print("Context limit behavior: unknown (model may truncate middle, stop at limit, or use rolling window)")
+        
+        # Helper functions for progress display
+        def print_progress(msg):
+            sys.stdout.write('\r' + ' ' * 150)  # clear line
+            sys.stdout.write('\r' + msg)
+            sys.stdout.flush()
+        
+        def clear_progress():
+            sys.stdout.write('\r' + ' ' * 150 + '\r')
+            sys.stdout.flush()
+        
         results_data = {
             "min_tokens": min_tokens,
             "max_tokens": max_tokens,
@@ -353,8 +385,7 @@ class TestFramework:
                 break
                 
             progress = (idx + 1) / len(test_points) * 100
-            sys.stdout.write(f"\r  [{progress:5.1f}%] Testing {tokens:,} tokens...")
-            sys.stdout.flush()
+            print_progress(f"  [{progress:5.1f}%] Testing {tokens:,} tokens...")
             
             # Create prompt of specified token length (approximate)
             # Using simple word repetition for consistency
@@ -402,12 +433,12 @@ class TestFramework:
             if success_rate == 1.0:
                 successful_sizes.append(tokens)
                 results_data["max_successful_tokens"] = max(successful_sizes)
-                print()  # newline after progress line
+                clear_progress()
                 print(f"  [{progress:5.1f}%] Testing {tokens:,} tokens... {Colors.OKGREEN}✓{Colors.ENDC} ({avg_latency:.2f}s)")
             else:
                 if not results_data["failure_at_tokens"]:
                     results_data["failure_at_tokens"] = tokens
-                print()
+                clear_progress()
                 print(f"  [{progress:5.1f}%] Testing {tokens:,} tokens... {Colors.FAIL}✗{Colors.ENDC} ({success_rate*100:.0f}% success)")
         
         duration = time.time() - start_time
