@@ -11,6 +11,7 @@ A Python script to stress test local LLM endpoints served via LMStudio or any Op
 - **Error Handling**: Tests malformed requests, edge cases, and prompt injection
 - **Memory Stability**: Long-running tests (up to 30 minutes)
 - **Deliberation Test**: Multi-agent adversarial deliberation coherence and robustness
+- **Streaming Metrics Test**: Measures prompt processing time, token generation time, and tokens per second
 - **GPU Monitoring**: Collects GPU metrics if available
 - **Progress Indicators**: Visual feedback for long-running tests
 
@@ -73,6 +74,13 @@ Edit `config.json` to customize test parameters:
       "adversarial_turns": 5,
       "context_switch_turns": 3
     },
+    "streaming_metrics": {
+      "enabled": true,
+      "num_requests": 10,
+      "max_tokens": 256,
+      "concurrent_workers": 4,
+      "requests_per_worker": 3
+    },
     "memory_stability": {
       "enabled": true,
       "duration_seconds": 1800
@@ -100,7 +108,7 @@ Gradually increases prompt length to find maximum context the model can handle.
 - **Sustained**: Constant request rate over time
 
 ### Parallelism Test
-Tests multiple concurrent workers to find optimal concurrency level. Optional shared memory mode simulates agents contributing to the same conversation history.
+Tests multiple concurrent workers to find optimal concurrency level. Optional shared memory mode simulates agents contributing to the same conversation history. Can also measure prompt processing and token generation times with streaming metrics.
 
 ### Streaming Test
 Compares streaming vs non-streaming responses, measures first token latency.
@@ -110,6 +118,9 @@ Tests server response to malformed requests, edge cases, and prompt injection at
 
 ### Deliberation Test
 Simulates multi-agent adversarial debates (CEO/Board member harness) to evaluate model's suitability for agentic frameworks. Measures coherence, adversarial robustness, and context retention.
+
+### Streaming Metrics Test
+Measures prompt processing time, token generation time, and tokens per second using streaming requests. Can be configured for concurrent workers to assess per‑agent and aggregate performance.
 
 ### Memory Stability Test
 Runs for up to 30 minutes to detect memory leaks or performance degradation. Configurable duration.

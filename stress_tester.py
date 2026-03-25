@@ -136,6 +136,59 @@ class LMStudioClient:
         except Exception as e:
             return {"error": str(e)}, 0
     
+    def _make_stream_request(self, url: str, data: Dict = None, method: str = 'GET'):
+        """Make streaming HTTP request, yields parsed JSON chunks"""
+        headers = self.session_headers.copy()
+        headers['Accept'] = 'text/event-stream'
+        
+        if data:
+            json_data = json.dumps(data).encode('utf-8')
+        else:
+            json_data = None
+        
+        req = urllib.request.Request(
+            url,
+            data=json_data,
+            headers=headers,
+            method=method
+        )
+        
+        try:
+            with urllib.request.urlopen(req, context=self.ssl_context, timeout=60) as response:
+                # Read line by line
+                for line in response:
+                    line = line.decode('utf-8').strip()
+                    if not line:
+                        continue
+                    if line.startswith('data: '):
+                        data_str = line[6:]
+                        if data_str == '[DONE]':
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            yield chunk
+                        except json.JSONDecodeError:
+                            # Skip malformed JSON
+                            continue
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8') if e.fp else ""
+            raise Exception(f"HTTP {e.code}: {error_body}")
+        except Exception as e:
+            raise Exception(f"Streaming request failed: {str(e)}")
+    
+    def chat_completion_stream(self, messages: List[Dict], model: str, max_tokens: int = 256,
+                              temperature: float = 0.7):
+        """Send streaming chat completion request, yields chunks"""
+        url = f"{self.endpoint}/chat/completions"
+        data = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True
+        }
+        return self._make_stream_request(url, data, 'POST')
+    
     def get_models(self) -> Tuple[List[Dict], int]:
         """Get list of available models"""
         url = f"{self.endpoint}/models"
@@ -247,6 +300,9 @@ class TestFramework:
         
         if 'deliberation' in test_config and test_config['deliberation'].get('enabled', True):
             self.run_deliberation_test(test_config['deliberation'])
+        
+        if 'streaming_metrics' in test_config and test_config['streaming_metrics'].get('enabled', True):
+            self.run_streaming_metrics_test(test_config['streaming_metrics'])
         
         return self.results
     
@@ -668,21 +724,29 @@ class TestFramework:
         requests_per_worker = config.get('requests_per_worker', 3)
         shared_memory = config.get('shared_memory', False)
         shared_memory_turns = config.get('shared_memory_turns', 5)
+        streaming_metrics = config.get('streaming_metrics', False)
         
         print(f"Max workers: {max_workers}, Requests per worker: {requests_per_worker}")
         if shared_memory:
             print(f"{Colors.OKCYAN}Shared memory mode: {shared_memory_turns} turns per worker{Colors.ENDC}")
+        if streaming_metrics:
+            print(f"{Colors.OKCYAN}Streaming metrics enabled: measuring prompt processing and token generation times{Colors.ENDC}")
         
         results_data = {
             "max_workers": max_workers,
             "requests_per_worker": requests_per_worker,
             "shared_memory": shared_memory,
             "shared_memory_turns": shared_memory_turns,
+            "streaming_metrics": streaming_metrics,
             "total_requests": 0,
             "total_successes": 0,
             "concurrency_levels": [],
             "avg_latency_p95_ms": 0,
-            "shared_memory_coherence": 0
+            "shared_memory_coherence": 0,
+            "aggregate_prompt_processing_ms": 0,
+            "aggregate_token_generation_ms": 0,
+            "aggregate_tokens_per_second": 0,
+            "per_worker_streaming_metrics": []
         }
         
         # Test different concurrency levels
@@ -707,6 +771,10 @@ class TestFramework:
                 worker_latencies = []
                 worker_successes = 0
                 worker_responses = []
+                worker_prompt_times = []
+                worker_gen_times = []
+                worker_tps = []
+                worker_token_counts = []
                 
                 for req_num in range(requests_per_worker):
                     if self._should_stop():
@@ -722,32 +790,77 @@ class TestFramework:
                         messages = [{"role": "user", "content": f"Worker {worker_id} request {req_num}"}]
                     
                     request_start = time.time()
+                    first_chunk_time = None
+                    last_chunk_time = None
+                    token_count = 0
+                    generated_text = ""
                     
                     try:
-                        response, status = self.client.chat_completion(
-                            messages, 
-                            self.model, 
-                            max_tokens=10,
-                            temperature=0.1
-                        )
-                        latency = time.time() - request_start
-                        worker_latencies.append(latency)
-                        
-                        if status == 200:
+                        if streaming_metrics:
+                            # Use streaming request
+                            for chunk in self.client.chat_completion_stream(
+                                messages,
+                                self.model,
+                                max_tokens=10,
+                                temperature=0.1
+                            ):
+                                current_time = time.time()
+                                if first_chunk_time is None:
+                                    first_chunk_time = current_time
+                                last_chunk_time = current_time
+                                # Count tokens from chunk delta (approximate)
+                                if 'choices' in chunk and chunk['choices']:
+                                    delta = chunk['choices'][0].get('delta', {})
+                                    content = delta.get('content', '')
+                                    if content:
+                                        token_count += len(content.split())
+                                        generated_text += content
+                            # After loop, we have metrics
+                            latency = time.time() - request_start
+                            prompt_time = (first_chunk_time - request_start) if first_chunk_time else latency
+                            gen_time = (last_chunk_time - first_chunk_time) if (first_chunk_time and last_chunk_time) else 0
+                            tps = token_count / gen_time if gen_time > 0 else 0
+                            
+                            worker_prompt_times.append(prompt_time)
+                            worker_gen_times.append(gen_time)
+                            worker_tps.append(tps)
+                            worker_token_counts.append(token_count)
+                            worker_latencies.append(latency)
                             worker_successes += 1
+                            
                             if shared_memory:
-                                # Extract assistant response
-                                assistant_content = response.get('choices', [{}])[0].get('message', {}).get('content', '')
+                                # Extract assistant response from generated_text
+                                assistant_content = generated_text
                                 worker_responses.append(assistant_content)
-                                # Add both user and assistant messages to shared history
                                 with shared_lock:
                                     shared_history.append({"role": "user", "content": f"Worker {worker_id} perspective on turn {req_num}: What are the key points?"})
                                     shared_history.append({"role": "assistant", "content": assistant_content})
-                                    # Limit history length to avoid huge payloads
                                     if len(shared_history) > shared_memory_turns * 2:
                                         shared_history.pop(0)
                                         shared_history.pop(0)
-                    except:
+                        else:
+                            # Non-streaming request
+                            response, status = self.client.chat_completion(
+                                messages, 
+                                self.model, 
+                                max_tokens=10,
+                                temperature=0.1
+                            )
+                            latency = time.time() - request_start
+                            worker_latencies.append(latency)
+                            
+                            if status == 200:
+                                worker_successes += 1
+                                if shared_memory:
+                                    assistant_content = response.get('choices', [{}])[0].get('message', {}).get('content', '')
+                                    worker_responses.append(assistant_content)
+                                    with shared_lock:
+                                        shared_history.append({"role": "user", "content": f"Worker {worker_id} perspective on turn {req_num}: What are the key points?"})
+                                        shared_history.append({"role": "assistant", "content": assistant_content})
+                                        if len(shared_history) > shared_memory_turns * 2:
+                                            shared_history.pop(0)
+                                            shared_history.pop(0)
+                    except Exception as e:
                         latency = time.time() - request_start
                         worker_latencies.append(latency)
                 
@@ -755,7 +868,11 @@ class TestFramework:
                     "worker_id": worker_id,
                     "successes": worker_successes,
                     "latencies": worker_latencies,
-                    "responses": worker_responses if shared_memory else []
+                    "responses": worker_responses if shared_memory else [],
+                    "prompt_times": worker_prompt_times,
+                    "gen_times": worker_gen_times,
+                    "tps": worker_tps,
+                    "token_counts": worker_token_counts
                 })
             
             # Start workers
@@ -773,6 +890,10 @@ class TestFramework:
             # Collect results
             all_latencies = []
             all_responses = []
+            all_prompt_times = []
+            all_gen_times = []
+            all_tps = []
+            all_token_counts = []
             worker_successes = 0
             
             while not results_queue.empty():
@@ -781,6 +902,11 @@ class TestFramework:
                 worker_successes += worker_result["successes"]
                 if shared_memory and "responses" in worker_result:
                     all_responses.extend(worker_result["responses"])
+                if streaming_metrics:
+                    all_prompt_times.extend(worker_result.get("prompt_times", []))
+                    all_gen_times.extend(worker_result.get("gen_times", []))
+                    all_tps.extend(worker_result.get("tps", []))
+                    all_token_counts.extend(worker_result.get("token_counts", []))
             
             total_requests = num_workers * requests_per_worker
             success_rate = worker_successes / total_requests if total_requests > 0 else 0
@@ -813,6 +939,17 @@ class TestFramework:
             else:
                 p95_latency = 0
             
+            # Streaming metrics averages
+            avg_prompt_ms = 0
+            avg_gen_ms = 0
+            avg_tps = 0
+            total_tokens = 0
+            if streaming_metrics and all_prompt_times:
+                avg_prompt_ms = statistics.mean(all_prompt_times) * 1000
+                avg_gen_ms = statistics.mean(all_gen_times) * 1000
+                avg_tps = statistics.mean(all_tps) if all_tps else 0
+                total_tokens = sum(all_token_counts)
+            
             concurrency_data = {
                 "num_workers": num_workers,
                 "total_requests": total_requests,
@@ -820,7 +957,11 @@ class TestFramework:
                 "success_rate": success_rate,
                 "avg_latency_ms": avg_latency,
                 "p95_latency_ms": p95_latency,
-                "coherence_score": coherence_score if shared_memory else None
+                "coherence_score": coherence_score if shared_memory else None,
+                "avg_prompt_processing_ms": avg_prompt_ms if streaming_metrics else None,
+                "avg_token_generation_ms": avg_gen_ms if streaming_metrics else None,
+                "avg_tokens_per_second": avg_tps if streaming_metrics else None,
+                "total_tokens": total_tokens if streaming_metrics else None
             }
             results_data["concurrency_levels"].append(concurrency_data)
             results_data["total_requests"] += total_requests
@@ -842,6 +983,21 @@ class TestFramework:
             if coherence_scores:
                 results_data["shared_memory_coherence"] = statistics.mean(coherence_scores)
         
+        # Calculate overall streaming metrics
+        if streaming_metrics:
+            prompt_times = [level.get("avg_prompt_processing_ms", 0) for level in results_data["concurrency_levels"] if level.get("avg_prompt_processing_ms") is not None]
+            gen_times = [level.get("avg_token_generation_ms", 0) for level in results_data["concurrency_levels"] if level.get("avg_token_generation_ms") is not None]
+            tps = [level.get("avg_tokens_per_second", 0) for level in results_data["concurrency_levels"] if level.get("avg_tokens_per_second") is not None]
+            total_tokens = [level.get("total_tokens", 0) for level in results_data["concurrency_levels"] if level.get("total_tokens") is not None]
+            if prompt_times:
+                results_data["aggregate_prompt_processing_ms"] = statistics.mean(prompt_times)
+            if gen_times:
+                results_data["aggregate_token_generation_ms"] = statistics.mean(gen_times)
+            if tps:
+                results_data["aggregate_tokens_per_second"] = statistics.mean(tps)
+            if total_tokens:
+                results_data["aggregate_total_tokens"] = sum(total_tokens)
+        
         duration = time.time() - start_time
         
         result = TestResult(
@@ -856,6 +1012,16 @@ class TestFramework:
         print(f"\nTotal requests: {results_data['total_requests']}")
         print(f"Total successes: {Colors.OKGREEN}{results_data['total_successes']}{Colors.ENDC}")
         print(f"Average P95 latency: {results_data['avg_latency_p95_ms']:.2f}ms")
+        if streaming_metrics:
+            agg = results_data.get("aggregate", {})
+            if "aggregate_prompt_processing_ms" in results_data:
+                print(f"Average prompt processing: {results_data['aggregate_prompt_processing_ms']:.1f}ms")
+            if "aggregate_token_generation_ms" in results_data:
+                print(f"Average token generation: {results_data['aggregate_token_generation_ms']:.1f}ms")
+            if "aggregate_tokens_per_second" in results_data:
+                print(f"Average tokens/sec: {results_data['aggregate_tokens_per_second']:.1f}")
+            if "aggregate_total_tokens" in results_data:
+                print(f"Total tokens generated: {results_data['aggregate_total_tokens']}")
         if shared_memory:
             print(f"Shared memory coherence: {results_data.get('shared_memory_coherence', 0)*100:.1f}%")
     
@@ -1434,6 +1600,192 @@ class TestFramework:
             avg_len = statistics.mean(results_data["response_lengths"])
             print(f"Average response length: {avg_len:.0f} chars")
 
+    def run_streaming_metrics_test(self, config: Dict):
+        """Measure prompt processing and token generation times using streaming"""
+        if self._should_stop():
+            return
+            
+        print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
+        print(f"{Colors.BOLD}STREAMING METRICS TEST{Colors.ENDC}")
+        print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
+        
+        start_time = time.time()
+        num_requests = config.get('num_requests', 10)
+        max_tokens = config.get('max_tokens', 256)
+        concurrent_workers = config.get('concurrent_workers', 1)
+        requests_per_worker = config.get('requests_per_worker', 1)
+        
+        print(f"Requests: {num_requests}, Max tokens: {max_tokens}, Workers: {concurrent_workers}, Req/worker: {requests_per_worker}")
+        
+        results_data = {
+            "num_requests": num_requests,
+            "max_tokens": max_tokens,
+            "concurrent_workers": concurrent_workers,
+            "requests_per_worker": requests_per_worker,
+            "total_requests": 0,
+            "successful_requests": 0,
+            "prompt_processing_times": [],
+            "token_generation_times": [],
+            "tokens_per_second": [],
+            "total_tokens": [],
+            "per_worker_metrics": [],
+            "aggregate": {}
+        }
+        
+        import queue
+        results_queue = queue.Queue()
+        
+        def worker_task(worker_id: int):
+            """Worker that sends streaming requests and collects metrics"""
+            worker_metrics = []
+            for req_num in range(requests_per_worker):
+                if self._should_stop():
+                    break
+                    
+                messages = [{"role": "user", "content": f"Worker {worker_id} request {req_num}: Tell me a short story about AI."}]
+                request_start = time.time()
+                first_chunk_time = None
+                last_chunk_time = None
+                token_count = 0
+                generated_text = ""
+                
+                try:
+                    for chunk in self.client.chat_completion_stream(
+                        messages,
+                        self.model,
+                        max_tokens=max_tokens,
+                        temperature=0.7
+                    ):
+                        current_time = time.time()
+                        if first_chunk_time is None:
+                            first_chunk_time = current_time
+                        last_chunk_time = current_time
+                        # Count tokens from chunk delta (approximate)
+                        if 'choices' in chunk and chunk['choices']:
+                            delta = chunk['choices'][0].get('delta', {})
+                            content = delta.get('content', '')
+                            if content:
+                                # Rough token count: split by whitespace
+                                token_count += len(content.split())
+                                generated_text += content
+                except Exception as e:
+                    # Request failed
+                    worker_metrics.append({
+                        "worker_id": worker_id,
+                        "request_num": req_num,
+                        "success": False,
+                        "error": str(e),
+                        "latency": time.time() - request_start
+                    })
+                    continue
+                
+                total_latency = time.time() - request_start
+                prompt_processing_time = (first_chunk_time - request_start) if first_chunk_time else total_latency
+                token_generation_time = (last_chunk_time - first_chunk_time) if (first_chunk_time and last_chunk_time) else 0
+                tokens_per_second = token_count / token_generation_time if token_generation_time > 0 else 0
+                
+                worker_metrics.append({
+                    "worker_id": worker_id,
+                    "request_num": req_num,
+                    "success": True,
+                    "prompt_processing_time": prompt_processing_time,
+                    "token_generation_time": token_generation_time,
+                    "token_count": token_count,
+                    "tokens_per_second": tokens_per_second,
+                    "total_latency": total_latency,
+                    "generated_text_length": len(generated_text)
+                })
+            
+            results_queue.put(worker_metrics)
+        
+        # Start workers
+        threads = []
+        for i in range(concurrent_workers):
+            thread = threading.Thread(target=worker_task, args=(i,))
+            thread.daemon = True
+            thread.start()
+            threads.append(thread)
+        
+        # Wait for completion
+        for thread in threads:
+            thread.join(timeout=300.0)
+        
+        # Collect results
+        all_metrics = []
+        while not results_queue.empty():
+            worker_metrics = results_queue.get()
+            all_metrics.extend(worker_metrics)
+        
+        # Aggregate metrics
+        successful = [m for m in all_metrics if m.get('success')]
+        failed = [m for m in all_metrics if not m.get('success')]
+        
+        results_data["total_requests"] = len(all_metrics)
+        results_data["successful_requests"] = len(successful)
+        
+        if successful:
+            prompt_times = [m["prompt_processing_time"] for m in successful]
+            gen_times = [m["token_generation_time"] for m in successful]
+            tps = [m["tokens_per_second"] for m in successful]
+            token_counts = [m["token_count"] for m in successful]
+            
+            results_data["prompt_processing_times"] = prompt_times
+            results_data["token_generation_times"] = gen_times
+            results_data["tokens_per_second"] = tps
+            results_data["total_tokens"] = token_counts
+            
+            results_data["aggregate"] = {
+                "avg_prompt_processing_ms": statistics.mean(prompt_times) * 1000 if prompt_times else 0,
+                "avg_token_generation_ms": statistics.mean(gen_times) * 1000 if gen_times else 0,
+                "avg_tokens_per_second": statistics.mean(tps) if tps else 0,
+                "total_tokens_generated": sum(token_counts),
+                "avg_tokens_per_request": statistics.mean(token_counts) if token_counts else 0
+            }
+        
+        # Per worker metrics
+        worker_ids = set(m["worker_id"] for m in successful)
+        for wid in worker_ids:
+            worker_success = [m for m in successful if m["worker_id"] == wid]
+            if worker_success:
+                w_prompt = [m["prompt_processing_time"] for m in worker_success]
+                w_gen = [m["token_generation_time"] for m in worker_success]
+                w_tps = [m["tokens_per_second"] for m in worker_success]
+                results_data["per_worker_metrics"].append({
+                    "worker_id": wid,
+                    "requests": len(worker_success),
+                    "avg_prompt_processing_ms": statistics.mean(w_prompt) * 1000 if w_prompt else 0,
+                    "avg_token_generation_ms": statistics.mean(w_gen) * 1000 if w_gen else 0,
+                    "avg_tokens_per_second": statistics.mean(w_tps) if w_tps else 0
+                })
+        
+        duration = time.time() - start_time
+        
+        result = TestResult(
+            test_name="streaming_metrics",
+            success=len(successful) > 0,
+            duration_seconds=duration,
+            data=results_data,
+            timestamp=datetime.now().isoformat()
+        )
+        self.results.append(result)
+        
+        # Print summary
+        print(f"\nTotal requests: {results_data['total_requests']}")
+        print(f"Successful: {Colors.OKGREEN}{results_data['successful_requests']}{Colors.ENDC}")
+        if successful:
+            agg = results_data["aggregate"]
+            print(f"Average prompt processing: {agg['avg_prompt_processing_ms']:.1f} ms")
+            print(f"Average token generation: {agg['avg_token_generation_ms']:.1f} ms")
+            print(f"Average tokens/sec: {agg['avg_tokens_per_second']:.1f}")
+            print(f"Total tokens generated: {agg['total_tokens_generated']}")
+            if results_data["per_worker_metrics"]:
+                print(f"Per-worker metrics:")
+                for w in results_data["per_worker_metrics"]:
+                    print(f"  Worker {w['worker_id']}: {w['requests']} requests, "
+                          f"prompt {w['avg_prompt_processing_ms']:.1f}ms, "
+                          f"gen {w['avg_token_generation_ms']:.1f}ms, "
+                          f"tps {w['avg_tokens_per_second']:.1f}")
+
 
 class ReportGenerator:
     """Generate reports in various formats"""
@@ -1578,7 +1930,8 @@ def load_config(config_file: str = None) -> Dict:
             "error_handling": {"enabled": True},
             "memory_stability": {"enabled": True},
             "gpu_monitoring": {"enabled": True},
-            "deliberation": {"enabled": True}
+            "deliberation": {"enabled": True},
+            "streaming_metrics": {"enabled": True}
         }
     }
 

@@ -53,6 +53,13 @@
       "topic": "Should our company invest in artificial intelligence research?",
       "adversarial_turns": 5,
       "context_switch_turns": 3
+    },
+    "streaming_metrics": {
+      "enabled": true,
+      "num_requests": 10,
+      "max_tokens": 256,
+      "concurrent_workers": 4,
+      "requests_per_worker": 3
     }
   },
   "output": {
