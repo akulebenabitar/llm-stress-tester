@@ -224,28 +224,28 @@ class TestFramework:
         # Run enabled tests
         test_config = self.config.get('tests', {})
         
-        if test_config.get('context_window', {}).get('enabled', True):
+        if 'context_window' in test_config and test_config['context_window'].get('enabled', True):
             self.run_context_window_test(test_config['context_window'])
         
-        if test_config.get('rate_limit_burst', {}).get('enabled', True):
+        if 'rate_limit_burst' in test_config and test_config['rate_limit_burst'].get('enabled', True):
             self.run_rate_limit_burst_test(test_config['rate_limit_burst'])
         
-        if test_config.get('rate_limit_sustained', {}).get('enabled', True):
+        if 'rate_limit_sustained' in test_config and test_config['rate_limit_sustained'].get('enabled', True):
             self.run_rate_limit_sustained_test(test_config['rate_limit_sustained'])
         
-        if test_config.get('parallelism', {}).get('enabled', True):
+        if 'parallelism' in test_config and test_config['parallelism'].get('enabled', True):
             self.run_parallelism_test(test_config['parallelism'])
         
-        if test_config.get('streaming', {}).get('enabled', True):
+        if 'streaming' in test_config and test_config['streaming'].get('enabled', True):
             self.run_streaming_test(test_config['streaming'])
         
-        if test_config.get('error_handling', {}).get('enabled', True):
+        if 'error_handling' in test_config and test_config['error_handling'].get('enabled', True):
             self.run_error_handling_test(test_config['error_handling'])
         
-        if test_config.get('memory_stability', {}).get('enabled', True):
+        if 'memory_stability' in test_config and test_config['memory_stability'].get('enabled', True):
             self.run_memory_stability_test(test_config['memory_stability'])
         
-        if test_config.get('deliberation', {}).get('enabled', True):
+        if 'deliberation' in test_config and test_config['deliberation'].get('enabled', True):
             self.run_deliberation_test(test_config['deliberation'])
         
         return self.results
