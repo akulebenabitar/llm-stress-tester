@@ -402,11 +402,13 @@ class TestFramework:
             if success_rate == 1.0:
                 successful_sizes.append(tokens)
                 results_data["max_successful_tokens"] = max(successful_sizes)
-                print(f"\r  [{progress:5.1f}%] {Colors.OKGREEN}✓{Colors.ENDC} ({avg_latency:.2f}s)")
+                print()  # newline after progress line
+                print(f"  [{progress:5.1f}%] Testing {tokens:,} tokens... {Colors.OKGREEN}✓{Colors.ENDC} ({avg_latency:.2f}s)")
             else:
                 if not results_data["failure_at_tokens"]:
                     results_data["failure_at_tokens"] = tokens
-                print(f"\r  [{progress:5.1f}%] {Colors.FAIL}✗{Colors.ENDC} ({success_rate*100:.0f}% success)")
+                print()
+                print(f"  [{progress:5.1f}%] Testing {tokens:,} tokens... {Colors.FAIL}✗{Colors.ENDC} ({success_rate*100:.0f}% success)")
         
         duration = time.time() - start_time
         
