@@ -6,7 +6,7 @@
     "context_window": {
       "enabled": true,
       "min_tokens": 100,
-      "max_tokens": 200000,
+      "max_tokens": 500000,
       "step_tokens": 2000,
       "requests_per_size": 2
     },
@@ -25,7 +25,9 @@
     "parallelism": {
       "enabled": true,
       "max_workers": 32,
-      "requests_per_worker": 3
+      "requests_per_worker": 3,
+      "shared_memory": false,
+      "shared_memory_turns": 5
     },
     "streaming": {
       "enabled": true,
@@ -34,15 +36,22 @@
     },
     "error_handling": {
       "enabled": true,
-      "num_invalid_requests": 5
+      "num_invalid_requests": 6
     },
     "memory_stability": {
       "enabled": true,
-      "duration_seconds": 300,
+      "duration_seconds": 1800,
       "requests_per_minute": 30
     },
     "gpu_monitoring": {
       "enabled": true
+    },
+    "deliberation": {
+      "enabled": true,
+      "num_turns": 20,
+      "topic": "Should our company invest in artificial intelligence research?",
+      "adversarial_turns": 5,
+      "context_switch_turns": 3
     }
   },
   "output": {
