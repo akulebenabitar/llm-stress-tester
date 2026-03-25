@@ -11,22 +11,25 @@ A Python script to stress test local LLM endpoints served via LMStudio or any Op
 - **Error Handling**: Tests malformed requests, edge cases, and prompt injection
 - **Memory Stability**: Long-running tests (up to 30 minutes)
 - **Deliberation Test**: Multi-agent adversarial deliberation coherence and robustness
-- **Streaming Metrics Test**: Measures prompt processing time, token generation time, and tokens per second
+- **Streaming Metrics Test**: Measures prompt processing time, token generation time, prompts/sec and tokens/sec for multi-agent workloads
 - **Model Context Info**: Queries model's advertised max context length and displays context limit behavior
-- **GPU Monitoring**: Collects GPU metrics if available
+- **Accurate Token Counting**: Uses tiktoken for precise BPE token counting
 - **Progress Indicators**: Visual feedback for long-running tests
 
 ## Requirements
 
 - Python 3.8+
 - LMStudio server running (or any OpenAI-compatible endpoint)
-- Optional: `psutil` for GPU monitoring
+- `tiktoken` for accurate token counting
 - **Virtual environment**: The script will automatically create and run in a virtual environment for isolation. You can also manually activate a venv before running.
 
 ## Usage
 
 ```bash
-# Basic test with default settings
+# Install dependencies
+pip install tiktoken
+
+# Basic test with default settings (default max duration: 600s)
 python stress_tester.py
 
 # Custom configuration
@@ -54,7 +57,7 @@ Edit `config.json` to customize test parameters:
 ```json
 {
   "endpoint": "http://localhost:1234/v1",
-  "max_test_duration_seconds": 1800,
+  "max_test_duration_seconds": 600,
   "tests": {
     "context_window": {
       "min_tokens": 100,
@@ -121,13 +124,10 @@ Tests server response to malformed requests, edge cases, and prompt injection at
 Simulates multi-agent adversarial debates (CEO/Board member harness) to evaluate model's suitability for agentic frameworks. Measures coherence, adversarial robustness, and context retention.
 
 ### Streaming Metrics Test
-Measures prompt processing time, token generation time, and tokens per second using streaming requests. Can be configured for concurrent workers to assess per‑agent and aggregate performance.
+Measures prompt processing time, token generation time, prompts/sec and tokens/sec using streaming requests. Can be configured for concurrent workers to assess per‑agent and aggregate performance. Critical for evaluating multi-agentic workloads.
 
 ### Memory Stability Test
 Runs for up to 30 minutes to detect memory leaks or performance degradation. Configurable duration.
-
-### GPU Monitoring
-Collects GPU utilization, memory usage, and temperature if available.
 
 ## License
 

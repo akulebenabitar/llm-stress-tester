@@ -26,12 +26,11 @@ import urllib.parse
 import ssl
 import io
 
-# Try to import psutil for GPU monitoring (optional)
 try:
-    import psutil
-    PSUTIL_AVAILABLE = True
+    import tiktoken
+    TIKTOKEN_AVAILABLE = True
 except ImportError:
-    PSUTIL_AVAILABLE = False
+    TIKTOKEN_AVAILABLE = False
 
 
 def ensure_venv():
@@ -80,6 +79,30 @@ class Colors:
     UNDERLINE = '\033[4m'
 
 
+class TokenCounter:
+    """Accurate token counting using tiktoken"""
+    
+    def __init__(self, model_name: str = "cl100k_base"):
+        self.encoding = None
+        self.model_name = model_name
+        if TIKTOKEN_AVAILABLE:
+            try:
+                self.encoding = tiktoken.get_encoding(model_name)
+            except Exception:
+                self.encoding = None
+    
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text accurately using tiktoken"""
+        if self.encoding:
+            return len(self.encoding.encode(text))
+        return len(text.split())
+
+
+def create_token_counter() -> TokenCounter:
+    """Factory function to create token counter with fallback"""
+    return TokenCounter()
+
+
 @dataclass
 class TestResult:
     """Container for test results"""
@@ -106,7 +129,7 @@ class LMStudioClient:
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
     
-    def _make_request(self, url: str, data: Dict = None, method: str = 'GET') -> Tuple[Dict, int]:
+    def _make_request(self, url: str, data: Dict = None, method: str = 'GET', timeout: int = 30) -> Tuple[Dict, int]:
         """Make HTTP request to the endpoint"""
         headers = self.session_headers.copy()
         
@@ -123,7 +146,7 @@ class LMStudioClient:
         )
         
         try:
-            with urllib.request.urlopen(req, context=self.ssl_context, timeout=30) as response:
+            with urllib.request.urlopen(req, context=self.ssl_context, timeout=timeout) as response:
                 response_data = response.read().decode('utf-8')
                 return json.loads(response_data), response.status
         except urllib.error.HTTPError as e:
@@ -207,7 +230,7 @@ class LMStudioClient:
         return {}, status
     
     def chat_completion(self, messages: List[Dict], model: str, max_tokens: int = 256, 
-                       temperature: float = 0.7, stream: bool = False) -> Tuple[Dict, int]:
+                       temperature: float = 0.7, stream: bool = False, timeout: int = 30) -> Tuple[Dict, int]:
         """Send chat completion request"""
         url = f"{self.endpoint}/chat/completions"
         data = {
@@ -217,7 +240,7 @@ class LMStudioClient:
             "temperature": temperature,
             "stream": stream
         }
-        return self._make_request(url, data, 'POST')
+        return self._make_request(url, data, 'POST', timeout)
     
     def test_connection(self) -> Tuple[bool, str]:
         """Test if endpoint is reachable"""
@@ -234,7 +257,7 @@ class LMStudioClient:
 class TestFramework:
     """Framework for running and managing tests"""
     
-    def __init__(self, client: LMStudioClient, config: Dict, max_duration: int = 300):
+    def __init__(self, client: LMStudioClient, config: Dict, max_duration: int = 600):
         self.client = client
         self.config = config
         self.max_duration = max_duration
@@ -242,6 +265,7 @@ class TestFramework:
         self.start_time = None
         self.model = None
         self._stop_event = threading.Event()
+        self.token_counter = create_token_counter()
         
     def _should_stop(self) -> bool:
         """Check if we should stop due to time limit"""
@@ -403,11 +427,14 @@ class TestFramework:
                     
                 request_start = time.time()
                 try:
+                    # Use longer timeout for large prompts (1s per 10k tokens + 30s base)
+                    timeout = max(30, tokens // 10000 + 30)
                     response, status = self.client.chat_completion(
                         messages, 
                         self.model, 
                         max_tokens=10,
-                        temperature=0.1
+                        temperature=0.1,
+                        timeout=timeout
                     )
                     latency = time.time() - request_start
                     latencies.append(latency)
@@ -841,12 +868,13 @@ class TestFramework:
                                 if first_chunk_time is None:
                                     first_chunk_time = current_time
                                 last_chunk_time = current_time
-                                # Count tokens from chunk delta (approximate)
                                 if 'choices' in chunk and chunk['choices']:
                                     delta = chunk['choices'][0].get('delta', {})
                                     content = delta.get('content', '')
+                                    if not content:
+                                        content = delta.get('reasoning_content', '')
                                     if content:
-                                        token_count += len(content.split())
+                                        token_count += self.token_counter.count_tokens(content)
                                         generated_text += content
                             # After loop, we have metrics
                             latency = time.time() - request_start
@@ -885,7 +913,10 @@ class TestFramework:
                             if status == 200:
                                 worker_successes += 1
                                 if shared_memory:
-                                    assistant_content = response.get('choices', [{}])[0].get('message', {}).get('content', '')
+                                    message = response.get('choices', [{}])[0].get('message', {})
+                                    assistant_content = message.get('content', '')
+                                    if not assistant_content:
+                                        assistant_content = message.get('reasoning_content', '')
                                     worker_responses.append(assistant_content)
                                     with shared_lock:
                                         shared_history.append({"role": "user", "content": f"Worker {worker_id} perspective on turn {req_num}: What are the key points?"})
@@ -1051,15 +1082,18 @@ class TestFramework:
                 print(f"Average prompt processing: {results_data['aggregate_prompt_processing_ms']:.1f}ms")
             if "aggregate_token_generation_ms" in results_data:
                 print(f"Average token generation: {results_data['aggregate_token_generation_ms']:.1f}ms")
+            prompts_per_sec = results_data['total_successes'] / duration if duration > 0 else 0
+            results_data['prompts_per_second'] = prompts_per_sec
+            print(f"Prompts/sec: {Colors.OKCYAN}{prompts_per_sec:.2f}{Colors.ENDC}")
             if "aggregate_tokens_per_second" in results_data:
-                print(f"Average tokens/sec: {results_data['aggregate_tokens_per_second']:.1f}")
+                print(f"Tokens/sec: {results_data['aggregate_tokens_per_second']:.1f}")
             if "aggregate_total_tokens" in results_data:
                 print(f"Total tokens generated: {results_data['aggregate_total_tokens']}")
         if shared_memory:
             print(f"Shared memory coherence: {results_data.get('shared_memory_coherence', 0)*100:.1f}%")
     
     def run_streaming_test(self, config: Dict):
-        """Test streaming responses"""
+        """Test streaming responses using actual streaming API"""
         if self._should_stop():
             return
             
@@ -1086,7 +1120,7 @@ class TestFramework:
             "non_streaming_latencies": []
         }
         
-        # Test streaming requests
+        # Test streaming requests using actual streaming API
         print("  Testing streaming requests...")
         first_token_latencies = []
         tokens_per_second = []
@@ -1098,11 +1132,59 @@ class TestFramework:
             messages = [{"role": "user", "content": "Tell me a short joke."}]
             
             try:
-                # Note: Our simple urllib client doesn't support streaming well
-                # For streaming test, we'll measure response time vs non-streaming
+                # Streaming request using actual streaming API
                 request_start = time.time()
+                first_chunk_time = None
+                last_chunk_time = None
+                token_count = 0
+                generated_text = ""
                 
-                # Non-streaming request for comparison
+                for chunk in self.client.chat_completion_stream(
+                    messages,
+                    self.model,
+                    max_tokens=max_tokens,
+                    temperature=0.7
+                ):
+                    current_time = time.time()
+                    if first_chunk_time is None:
+                        first_chunk_time = current_time
+                    last_chunk_time = current_time
+                    
+                    if 'choices' in chunk and chunk['choices']:
+                        delta = chunk['choices'][0].get('delta', {})
+                        content = delta.get('content', '')
+                        if not content:
+                            content = delta.get('reasoning_content', '')
+                        if content:
+                            token_count += self.token_counter.count_tokens(content)
+                            generated_text += content
+                
+                total_latency = time.time() - request_start
+                
+                # Calculate metrics
+                prompt_time = (first_chunk_time - request_start) if first_chunk_time else total_latency
+                gen_time = (last_chunk_time - first_chunk_time) if (first_chunk_time and last_chunk_time) else 0
+                tps = token_count / gen_time if gen_time > 0 else 0
+                
+                results_data["streaming_requests"] += 1
+                results_data["streaming_successes"] += 1
+                results_data["streaming_latencies"].append(total_latency)
+                first_token_latencies.append(prompt_time)
+                tokens_per_second.append(tps)
+                
+            except Exception as e:
+                print(f"    Request {i+1} failed: {str(e)}")
+        
+        # Test non-streaming requests for comparison
+        print("  Testing non-streaming requests...")
+        for i in range(num_requests):
+            if self._should_stop():
+                break
+                
+            messages = [{"role": "user", "content": "Tell me a short joke."}]
+            
+            try:
+                request_start = time.time()
                 response, status = self.client.chat_completion(
                     messages, 
                     self.model, 
@@ -1117,17 +1199,6 @@ class TestFramework:
                 
                 if status == 200:
                     results_data["non_streaming_successes"] += 1
-                    # Estimate tokens per second
-                    content = response.get('choices', [{}])[0].get('message', {}).get('content', '')
-                    token_count = len(content.split())
-                    if latency > 0:
-                        tokens_per_second.append(token_count / latency)
-                
-                # For streaming, we simulate by measuring time to first byte
-                # In a real streaming implementation, we'd parse SSE events
-                results_data["streaming_requests"] += 1
-                results_data["streaming_successes"] += 1
-                first_token_latencies.append(latency * 0.3)  # Approximate first token time
                 
             except Exception as e:
                 print(f"    Request {i+1} failed: {str(e)}")
@@ -1538,7 +1609,11 @@ class TestFramework:
                 latency = time.time() - request_start
                 
                 if status == 200:
-                    assistant_message = response.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    message = response.get('choices', [{}])[0].get('message', {})
+                    assistant_message = message.get('content', '')
+                    # Handle models that use reasoning_content (e.g., Qwen thinking models)
+                    if not assistant_message:
+                        assistant_message = message.get('reasoning_content', '')
                     conversation_history.append({"role": "assistant", "content": assistant_message})
                     
                     # Calculate metrics
@@ -1693,13 +1768,13 @@ class TestFramework:
                         if first_chunk_time is None:
                             first_chunk_time = current_time
                         last_chunk_time = current_time
-                        # Count tokens from chunk delta (approximate)
                         if 'choices' in chunk and chunk['choices']:
                             delta = chunk['choices'][0].get('delta', {})
                             content = delta.get('content', '')
+                            if not content:
+                                content = delta.get('reasoning_content', '')
                             if content:
-                                # Rough token count: split by whitespace
-                                token_count += len(content.split())
+                                token_count += self.token_counter.count_tokens(content)
                                 generated_text += content
                 except Exception as e:
                     # Request failed
@@ -1807,9 +1882,13 @@ class TestFramework:
         print(f"Successful: {Colors.OKGREEN}{results_data['successful_requests']}{Colors.ENDC}")
         if successful:
             agg = results_data["aggregate"]
+            prompts_per_sec = len(successful) / duration if duration > 0 else 0
+            agg["prompts_per_second"] = prompts_per_sec
+            agg["test_duration_seconds"] = duration
             print(f"Average prompt processing: {agg['avg_prompt_processing_ms']:.1f} ms")
             print(f"Average token generation: {agg['avg_token_generation_ms']:.1f} ms")
-            print(f"Average tokens/sec: {agg['avg_tokens_per_second']:.1f}")
+            print(f"Prompts/sec: {Colors.OKCYAN}{prompts_per_sec:.2f}{Colors.ENDC}")
+            print(f"Tokens/sec: {Colors.OKCYAN}{agg['avg_tokens_per_second']:.1f}{Colors.ENDC}")
             print(f"Total tokens generated: {agg['total_tokens_generated']}")
             if results_data["per_worker_metrics"]:
                 print(f"Per-worker metrics:")
@@ -1953,7 +2032,7 @@ def load_config(config_file: str = None) -> Dict:
     return {
         "endpoint": "http://localhost:1234/v1",
         "api_key": "lm-studio",
-        "max_test_duration_seconds": 1800,
+        "max_test_duration_seconds": 600,
         "tests": {
             "context_window": {"enabled": True},
             "rate_limit_burst": {"enabled": True},
@@ -1962,7 +2041,6 @@ def load_config(config_file: str = None) -> Dict:
             "streaming": {"enabled": True},
             "error_handling": {"enabled": True},
             "memory_stability": {"enabled": True},
-            "gpu_monitoring": {"enabled": True},
             "deliberation": {"enabled": True},
             "streaming_metrics": {"enabled": True}
         }
@@ -2005,8 +2083,8 @@ Examples:
     parser.add_argument('--api-key', '-k', help='API key (default: lm-studio)')
     parser.add_argument('--tests', '-t', help='Comma-separated list of tests to run')
     parser.add_argument('--disable', '-d', help='Comma-separated list of tests to disable')
-    parser.add_argument('--max-duration', '-m', type=int, default=300, 
-                       help='Maximum total test duration in seconds (default: 300)')
+    parser.add_argument('--max-duration', '-m', type=int, default=600, 
+                       help='Maximum total test duration in seconds (default: 600)')
     parser.add_argument('--output-dir', '-o', help='Output directory for reports')
     parser.add_argument('--no-save', action='store_true', 
                        help='Do not save JSON/CSV reports')
