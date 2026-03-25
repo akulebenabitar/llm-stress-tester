@@ -1114,6 +1114,8 @@ class TestFramework:
             "non_streaming_requests": 0,
             "streaming_successes": 0,
             "non_streaming_successes": 0,
+            "avg_prompt_processing_ms": 0,
+            "avg_token_generation_ms": 0,
             "avg_first_token_latency_ms": 0,
             "avg_tokens_per_second": 0,
             "streaming_latencies": [],
@@ -1122,7 +1124,8 @@ class TestFramework:
         
         # Test streaming requests using actual streaming API
         print("  Testing streaming requests...")
-        first_token_latencies = []
+        prompt_processing_times = []
+        token_generation_times = []
         tokens_per_second = []
         
         for i in range(num_requests):
@@ -1169,7 +1172,8 @@ class TestFramework:
                 results_data["streaming_requests"] += 1
                 results_data["streaming_successes"] += 1
                 results_data["streaming_latencies"].append(total_latency)
-                first_token_latencies.append(prompt_time)
+                prompt_processing_times.append(prompt_time)
+                token_generation_times.append(gen_time)
                 tokens_per_second.append(tps)
                 
             except Exception as e:
@@ -1204,8 +1208,11 @@ class TestFramework:
                 print(f"    Request {i+1} failed: {str(e)}")
         
         # Calculate metrics
-        if first_token_latencies:
-            results_data["avg_first_token_latency_ms"] = statistics.mean(first_token_latencies) * 1000
+        if prompt_processing_times:
+            results_data["avg_prompt_processing_ms"] = statistics.mean(prompt_processing_times) * 1000
+        
+        if token_generation_times:
+            results_data["avg_token_generation_ms"] = statistics.mean(token_generation_times) * 1000
         
         if tokens_per_second:
             results_data["avg_tokens_per_second"] = statistics.mean(tokens_per_second)
@@ -1225,8 +1232,10 @@ class TestFramework:
         print(f"Streaming successes: {Colors.OKGREEN}{results_data['streaming_successes']}{Colors.ENDC}")
         print(f"Non-streaming requests: {results_data['non_streaming_requests']}")
         print(f"Non-streaming successes: {Colors.OKGREEN}{results_data['non_streaming_successes']}{Colors.ENDC}")
-        print(f"Average first token latency: {results_data['avg_first_token_latency_ms']:.2f}ms")
-        print(f"Average tokens per second: {Colors.OKCYAN}{results_data['avg_tokens_per_second']:.2f}{Colors.ENDC}")
+        print(f"Average prompt processing: {results_data['avg_prompt_processing_ms']:.1f} ms")
+        print(f"Average token generation: {results_data['avg_token_generation_ms']:.1f} ms")
+        print(f"Prompt tokens/sec: {Colors.OKCYAN}{(1000/results_data['avg_prompt_processing_ms']):.1f}{Colors.ENDC}" if results_data['avg_prompt_processing_ms'] > 0 else "Prompt tokens/sec: N/A")
+        print(f"Tokens per second: {Colors.OKCYAN}{results_data['avg_tokens_per_second']:.1f}{Colors.ENDC}")
     
     def run_error_handling_test(self, config: Dict):
         """Test error handling and edge cases"""
