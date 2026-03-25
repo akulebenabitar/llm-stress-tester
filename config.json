@@ -8,7 +8,8 @@
       "min_tokens": 100,
       "max_tokens": 500000,
       "step_tokens": 2000,
-      "requests_per_size": 2
+      "requests_per_size": 2,
+      "max_test_points": 50
     },
     "rate_limit_burst": {
       "enabled": true,

@@ -57,7 +57,8 @@ Edit `config.json` to customize test parameters:
     "context_window": {
       "min_tokens": 100,
       "max_tokens": 500000,
-      "step_tokens": 2000
+      "step_tokens": 2000,
+      "max_test_points": 50
     },
     "parallelism": {
       "enabled": true,

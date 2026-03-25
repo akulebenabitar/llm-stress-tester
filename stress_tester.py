@@ -264,9 +264,11 @@ class TestFramework:
         max_tokens = config.get('max_tokens', 500000)
         step_tokens = config.get('step_tokens', 2000)
         requests_per_size = config.get('requests_per_size', 2)
+        max_test_points = config.get('max_test_points', 50)
         
         print(f"Testing context window from {min_tokens} to {max_tokens} tokens")
         print(f"Step size: {step_tokens} tokens, Requests per size: {requests_per_size}")
+        print(f"Max test points: {max_test_points}")
         
         results_data = {
             "min_tokens": min_tokens,
@@ -286,7 +288,7 @@ class TestFramework:
             # Increase step size as tokens increase
             current += step_tokens * (1 + len(test_points) // 5)
         
-        test_points = test_points[:20]  # Limit to 20 test points for time constraints
+        test_points = test_points[:max_test_points]  # Limit to max_test_points for time constraints
         
         successful_sizes = []
         for idx, tokens in enumerate(test_points):
