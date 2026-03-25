@@ -1447,15 +1447,6 @@ class TestFramework:
                 results_data["success_rate_over_time"].append(batch_success_rate)
                 results_data["latency_over_time"].append(batch_avg_latency)
                 
-                # Try to get memory usage if psutil is available
-                if PSUTIL_AVAILABLE:
-                    try:
-                        process = psutil.Process()
-                        memory_mb = process.memory_info().rss / 1024 / 1024
-                        results_data["memory_usage_mb"].append(memory_mb)
-                    except:
-                        pass
-                
                 # Reset batch
                 batch_start = time.time()
                 batch_latencies = []
