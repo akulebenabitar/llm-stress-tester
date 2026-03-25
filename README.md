@@ -12,6 +12,7 @@ A Python script to stress test local LLM endpoints served via LMStudio or any Op
 - **Memory Stability**: Long-running tests (up to 30 minutes)
 - **Deliberation Test**: Multi-agent adversarial deliberation coherence and robustness
 - **Streaming Metrics Test**: Measures prompt processing time, token generation time, and tokens per second
+- **Model Context Info**: Queries model's advertised max context length and displays context limit behavior
 - **GPU Monitoring**: Collects GPU metrics if available
 - **Progress Indicators**: Visual feedback for long-running tests
 
@@ -101,7 +102,7 @@ Results are saved in the current directory with timestamps.
 ## Test Descriptions
 
 ### Context Window Test
-Gradually increases prompt length to find maximum context the model can handle.
+Gradually increases prompt length to find maximum context the model can handle. Queries the model's advertised max context length via the API and displays it, along with a note about context limit behavior (truncate middle, stop at limit, or rolling window).
 
 ### Rate Limiting Tests
 - **Burst**: Rapid concurrent requests to find burst capacity

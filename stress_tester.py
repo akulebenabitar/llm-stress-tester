@@ -350,8 +350,8 @@ class TestFramework:
         
         # Helper functions for progress display
         def print_progress(msg):
-            sys.stdout.write('\r' + ' ' * 150)  # clear line
-            sys.stdout.write('\r' + msg)
+            # Write carriage return, message, then spaces to clear remainder of line
+            sys.stdout.write('\r' + msg + ' ' * (150 - len(msg)))
             sys.stdout.flush()
         
         def clear_progress():
